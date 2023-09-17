@@ -3,3 +3,5 @@ safety.py
 __pycache__
 *_pb2.py
 *.csv
+*.xlsm
+*.xls

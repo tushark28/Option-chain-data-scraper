@@ -1,18 +1,18 @@
 import format_pb2 as pb
 import upstox_client
-import websockets
-import time
+from datetime import datetime, time, timedelta
 from upstox_client.rest import ApiException
 from pprint import pprint
-import safety
-import asyncio
-import websockets
-import json
+import safety #safety.py module, which consists of our credentials
+import asyncio, websockets
+import json, os, sys, ssl
 from google.protobuf.json_format import MessageToDict
-import ssl
-import xlwings
-from datetime import datetime, time
+import xlwings as xw
 import pandas as pd
+from py_vollib.black_scholes.greeks.analytical import delta, gamma, rho, theta, vega
+from concurrent.futures import ThreadPoolExecutor, wait
+import re
+from copy import deepcopy
 
 # Configure OAuth2 access token for authorization: OAUTH2
 configuration = upstox_client.Configuration()
@@ -21,6 +21,67 @@ configuration.access_token = safety.token
 # create an instance of the API class
 api_instance = upstox_client.WebsocketApi(upstox_client.ApiClient(configuration))
 api_version = '2.0'
+
+if not os.path.exists("Real-Time Ticker.xlsm"):
+    try:
+        book = xw.Book()
+        book.save("Real-Time Ticker.xlsm")
+        book.close()
+    except Exception as e:
+        print(f"Error Creating Excel File : {e}")
+        sys.exit()
+book = xw.Book("Real-Time Ticker.xlsm")
+
+sheet_no = 1
+sheet = book.sheets(f"OptionChain{sheet_no}")
+sheet.range("a1:af22").value = None
+
+def scraping_data_to_excel(response, strike_type, current_price, expiry_date):
+    index_dict = {
+        "ltp" : "j" if strike_type == "CE" else "v",
+        "chng" : "k" if strike_type == "CE" else "u",
+        "rho" : "e" if strike_type == "CE" else "aa",
+        "iv" : "i" if strike_type == "CE" else "w",
+        "delta" : "a" if strike_type == "CE" else "ae",
+        "theta" : "c" if strike_type == "CE" else "ac",
+        "gamma" : "b" if strike_type == "CE" else "ad",
+        "vega" : "d" if strike_type == "CE" else "ab",
+        "volume" : "h" if strike_type == "CE" else "x",
+        "oi" : "f" if strike_type == "CE" else "z",
+        "chng_oi" : "g" if strike_type == "CE" else "y"
+    }
+
+    for count,feed in enumerate(response,3):
+        ff = feed.get('ff')
+        #ltp and chng
+        temp = ff.get("marketFF").get("ltpc")
+        sheet.range[f'{index_dict["ltp"]}{count}'] = temp.get("ltp")
+        sheet.range[f'{index_dict["chng"]}{count}'] = temp.get("ltp") - temp.get("cp")
+
+        #option_greeks
+        S = current_price  
+        K = feed.get("price")  
+        t = ((datetime(expiry_date.year, expiry_date.month, expiry_date.day, 15, 30) - datetime.now()) / timedelta(days=1)) / 365
+        r = 0.03
+        option_type = 'p' if strike_type.upper() == 'PE' else 'c'
+
+        temp = ff.get('optionGreeks')
+        sigma = sheet.range[f'{index_dict["iv"]}{count}'] = temp.get("iv")
+        sheet.range[f'{index_dict["rho"]}{count}']= rho(option_type, S, K, t, r, sigma)
+
+        sheet.range[f'{index_dict["delta"]}{count}']=temp.get("delta")
+        sheet.range[f'{index_dict["theta"]}{count}']=temp.get("theta")
+        sheet.range[f'{index_dict["gamma"]}{count}']=temp.get("gamma")
+        sheet.range[f'{index_dict["vega"]}{count}']=temp.get("vega")
+
+        temp = ff.get("eFeedDetails")
+        sheet.range[f'{index_dict["volume"]}{count}']=temp.get("vtt")
+        sheet.range[f'{index_dict["oi"]}{count}']=temp.get("oi")
+        sheet.range[f'{index_dict["chng_oi"]}{count}']=temp.get("oi") - temp.get("poi")
+
+
+
+
 
 def get_market_data_feed_authorize(api_version, configuration):
     """Get authorization for market data feed."""
@@ -37,7 +98,7 @@ def decode_protobuf(buffer):
     return feed_response
 
 
-async def fetch_market_data(instrument_list):
+async def fetch_market_data(instrument_dict, price, expiry_date):
     """Fetch market data using WebSocket and print it."""
 
     # Create default SSL context
@@ -67,7 +128,7 @@ async def fetch_market_data(instrument_list):
             "method": "sub",
             "data": {
                 "mode": "full",
-                "instrumentKeys": instrument_list
+                "instrumentKeys": [x for x in instrument_dict.keys()]
             }
         }
 
@@ -75,20 +136,45 @@ async def fetch_market_data(instrument_list):
         binary_data = json.dumps(data).encode('utf-8')
         await websocket.send(binary_data)
 
+        pe_pattern = r'\D+(\d+)PE'
+        ce_pattern = r'\D+(\d+)CE'
+        
         # Continuously receive and decode data from WebSocket
+
         while True:
             message = await websocket.recv()
             decoded_data = decode_protobuf(message)
 
             # Convert the decoded data to a dictionary
             data_dict = MessageToDict(decoded_data)
+            pe_dict = ce_dict =  dict()
 
-            
+            for x in data_dict['feeds'].keys():
+                if "CE" in instrument_dict[x]:
+                    match = re.search(ce_pattern, instrument_dict[x])
+                    if match:
+                        data_dict["feeds"][x]['price'] = int(match.group(1))
+                    ce_dict[x] = data_dict["feeds"][x]
+
+                else:
+                    match = re.search(pe_pattern, instrument_dict[x])
+                    if match:
+                        data_dict["feeds"][x]['price'] = int(match.group(1))
+                    pe_dict[x] = data_dict["feeds"][x]
+
+            ce_dict = dict(sorted(ce_dict.items(), key=lambda x: x[1]['price']))
+            pe_dict = dict(sorted(pe_dict.items(), key=lambda x: x[1]['price']))
+
+            with ThreadPoolExecutor() as executor:
+                future1 = executor.submit(scraping_data_to_excel,ce_dict,"CE",price)
+                future2 = executor.submit(scraping_data_to_excel,pe_dict,"PE",price)
+
+                wait([future1, future2])
+
 
 
 
 if __name__ == "__main__":
-    # Execute the function to fetch market data
 
     instrument_list = ["NSE_FO|58292","NSE_FO|59124"]
     # asyncio.run(fetch_market_data(instrument_list))
@@ -98,8 +184,67 @@ if __name__ == "__main__":
     df.dropna(subset=['tradingsymbol'], inplace=True)
 
     #TODO how to take input, figure out.
+    #Taking date as input and Parsing it.
+    input_date = "2023-09-23"
+    expiry_date = datetime.strptime(input_date, "%Y-%m-%d")
 
-    filtered_df = df[df['tradingsymbol'].str.contains(r'BANKNIFTY.*', case=True, regex=True)]
+    expiry_date = expiry_date.strftime("%d%b").upper()
 
-    filtered_column = filtered_df['tradingsymbol']
-    filtered_column.to_csv('output.csv', index=False, header=['Symbols'])
+    call_df = deepcopy(df[df['tradingsymbol'].str.contains(rf'^BANKNIFTY{expiry_date}.*CE', case=True, regex=True)]).reset_index(drop=True)
+    put_df = deepcopy(df[df['tradingsymbol'].str.contains(rf'^BANKNIFTY{expiry_date}.*PE', case=True, regex=True)]).reset_index(drop=True)
+
+    # filtered_column = call_df['tradingsymbol']
+    # filtered_column.to_csv('call.csv', index=False, header=['Symbols'])
+    # filtered_column = put_df['tradingsymbol']
+    # filtered_column.to_csv('put.csv', index=False, header=['Symbols'])
+
+
+    configuration = upstox_client.Configuration()
+    configuration.access_token = safety.token
+
+    api_instance = upstox_client.MarketQuoteApi(upstox_client.ApiClient(configuration))
+    symbol = 'NSE_INDEX|Nifty Bank'
+    api_version = '2.0'
+
+    strike_price = 0
+    try:
+        api_response = api_instance.get_full_market_quote(symbol, api_version)
+        symbol = symbol.replace('|',':')
+        strike_price = api_response.data[symbol].last_price
+    except ApiException as e:
+        print("Exception when calling MarketQuoteApi->get_full_market_quote: %s\n" % e)
+    x = 0
+    rounded_price = round(strike_price / 50) * 50
+    spot_price = 0
+    tradingsymbol = ""
+    while True:
+        spot_price = rounded_price - (x*50)
+        flag = call_df['tradingsymbol'].str.contains(f'BANKNIFTY{expiry_date}{spot_price}CE', case=False).any()
+        if flag:
+            tradingsymbol = f'BANKNIFTY{expiry_date}{spot_price}CE'
+            break
+        spot_price = rounded_price + (x*50)
+        flag = call_df['tradingsymbol'].str.contains(f'^BANKNIFTY{expiry_date}{spot_price}CE', case=False).any()
+        if flag:
+            tradingsymbol = f'BANKNIFTY{expiry_date}{spot_price}CE'
+            break
+        x += 1
+    
+    #Creating Call Dict around Spot Price
+    target_row_index = call_df[call_df['tradingsymbol'] == tradingsymbol].index[0]
+    start_index = max(target_row_index - 8, 0) 
+    end_index = min(target_row_index + 9, len(call_df)) 
+    selected_rows = call_df.iloc[start_index:end_index]
+    ce_dict = { row['instrument_key']: row['tradingsymbol'] for index, row in selected_rows.iterrows()}
+
+    #Creating Put Dict around Spot Price
+    tradingsymbol = tradingsymbol.replace("CE","PE")
+    target_row_index = put_df[put_df['tradingsymbol'] == tradingsymbol].index[0]
+    start_index = max(target_row_index - 8, 0) 
+    end_index = min(target_row_index + 9, len(put_df))
+    selected_rows = put_df.iloc[start_index:end_index]
+    pe_dict = { row['instrument_key']: row['tradingsymbol'] for index, row in selected_rows.iterrows()}
+
+
+
+
