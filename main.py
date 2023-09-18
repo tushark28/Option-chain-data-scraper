@@ -33,8 +33,20 @@ if not os.path.exists("Real-Time Ticker.xlsm"):
 book = xw.Book("Real-Time Ticker.xlsm")
 
 sheet_no = 1
+
+
+sheet_exists = False
+for ex_sheet in book.sheets:
+    if ex_sheet.name == f"OptionChain{sheet_no}":
+        ex_sheet.range("a1:af22").value = None
+        sheet_exists = True
+        break
+
+if not sheet_exists:
+    book.sheets.add(f"OptionChain{sheet_no}")
+    book.save()
+
 sheet = book.sheets(f"OptionChain{sheet_no}")
-sheet.range("a1:af22").value = None
 
 def scraping_data_to_excel(response, strike_type, current_price, expiry_date):
     index_dict = {
@@ -51,12 +63,14 @@ def scraping_data_to_excel(response, strike_type, current_price, expiry_date):
         "chng_oi" : "g" if strike_type == "CE" else "y"
     }
 
-    for count,feed in enumerate(response,3):
-        ff = feed.get('ff')
+    count = 3
+    for feed in response.values():
+        ff = feed.get('ff').get("marketFF")
         #ltp and chng
-        temp = ff.get("marketFF").get("ltpc")
-        sheet.range[f'{index_dict["ltp"]}{count}'] = temp.get("ltp")
-        sheet.range[f'{index_dict["chng"]}{count}'] = temp.get("ltp") - temp.get("cp")
+        temp = ff.get("ltpc")
+        print(temp.get("ltp"))
+        sheet.range(f'{index_dict["ltp"]}{count}').value = temp.get("ltp")
+        sheet.range(f'{index_dict["chng"]}{count}').value = temp.get("ltp") - temp.get("cp")
 
         #option_greeks
         S = current_price  
@@ -66,18 +80,20 @@ def scraping_data_to_excel(response, strike_type, current_price, expiry_date):
         option_type = 'p' if strike_type.upper() == 'PE' else 'c'
 
         temp = ff.get('optionGreeks')
-        sigma = sheet.range[f'{index_dict["iv"]}{count}'] = temp.get("iv")
-        sheet.range[f'{index_dict["rho"]}{count}']= rho(option_type, S, K, t, r, sigma)
+        sigma = sheet.range(f'{index_dict["iv"]}{count}').value = temp.get("iv") if temp else 0
+        sheet.range(f'{index_dict["rho"]}{count}').value= rho(option_type, S, K, t, r, sigma)
 
-        sheet.range[f'{index_dict["delta"]}{count}']=temp.get("delta")
-        sheet.range[f'{index_dict["theta"]}{count}']=temp.get("theta")
-        sheet.range[f'{index_dict["gamma"]}{count}']=temp.get("gamma")
-        sheet.range[f'{index_dict["vega"]}{count}']=temp.get("vega")
+        sheet.range(f'{index_dict["delta"]}{count}').value = temp.get("delta") if temp else 0
+        sheet.range(f'{index_dict["theta"]}{count}').value = temp.get("theta") if temp else 0
+        sheet.range(f'{index_dict["gamma"]}{count}').value = temp.get("gamma") if temp else 0
+        sheet.range(f'{index_dict["vega"]}{count}').value = temp.get("vega") if temp else 0
 
         temp = ff.get("eFeedDetails")
-        sheet.range[f'{index_dict["volume"]}{count}']=temp.get("vtt")
-        sheet.range[f'{index_dict["oi"]}{count}']=temp.get("oi")
-        sheet.range[f'{index_dict["chng_oi"]}{count}']=temp.get("oi") - temp.get("poi")
+        sheet.range(f'{index_dict["volume"]}{count}').value = temp.get("vtt") if temp else 0 
+        sheet.range(f'{index_dict["oi"]}{count}').value = temp.get("oi")  if temp else 0
+        sheet.range(f'{index_dict["chng_oi"]}{count}').value = temp.get("oi") - temp.get("poi")  if temp else 0
+        book.save("Real-Time Ticker.xlsm")
+        count += 1
 
 
 
@@ -147,8 +163,8 @@ async def fetch_market_data(instrument_dict, price, expiry_date):
 
             # Convert the decoded data to a dictionary
             data_dict = MessageToDict(decoded_data)
-            pe_dict = ce_dict =  dict()
-
+            pe_dict = dict()
+            ce_dict = dict()
             for x in data_dict['feeds'].keys():
                 if "CE" in instrument_dict[x]:
                     match = re.search(ce_pattern, instrument_dict[x])
@@ -164,20 +180,21 @@ async def fetch_market_data(instrument_dict, price, expiry_date):
 
             ce_dict = dict(sorted(ce_dict.items(), key=lambda x: x[1]['price']))
             pe_dict = dict(sorted(pe_dict.items(), key=lambda x: x[1]['price']))
+            # with ThreadPoolExecutor() as executor:
+            #     future1 = executor.submit(scraping_data_to_excel,ce_dict, "CE", price, expiry_date)
+            #     future2 = executor.submit(scraping_data_to_excel,pe_dict, "PE", price, expiry_date)
 
-            with ThreadPoolExecutor() as executor:
-                future1 = executor.submit(scraping_data_to_excel,ce_dict,"CE",price)
-                future2 = executor.submit(scraping_data_to_excel,pe_dict,"PE",price)
-
-                wait([future1, future2])
+            #     wait([future1, future2])
+          
+            scraping_data_to_excel(ce_dict, "CE", price, expiry_date)
+            scraping_data_to_excel(pe_dict, "PE", price, expiry_date)
+            print("threads done")
 
 
 
 
 if __name__ == "__main__":
 
-    instrument_list = ["NSE_FO|58292","NSE_FO|59124"]
-    # asyncio.run(fetch_market_data(instrument_list))
 
     dtype = {'instrument_key': str, 'tradingsymbol': str}
     df = pd.read_csv('NSE.csv', usecols=['instrument_key', 'tradingsymbol'],dtype=dtype)
@@ -186,9 +203,9 @@ if __name__ == "__main__":
     #TODO how to take input, figure out.
     #Taking date as input and Parsing it.
     input_date = "2023-09-23"
-    expiry_date = datetime.strptime(input_date, "%Y-%m-%d")
+    date_obj = datetime.strptime(input_date, "%Y-%m-%d")
 
-    expiry_date = expiry_date.strftime("%d%b").upper()
+    expiry_date = date_obj.strftime("%d%b").upper()
 
     call_df = deepcopy(df[df['tradingsymbol'].str.contains(rf'^BANKNIFTY{expiry_date}.*CE', case=True, regex=True)]).reset_index(drop=True)
     put_df = deepcopy(df[df['tradingsymbol'].str.contains(rf'^BANKNIFTY{expiry_date}.*PE', case=True, regex=True)]).reset_index(drop=True)
@@ -206,15 +223,15 @@ if __name__ == "__main__":
     symbol = 'NSE_INDEX|Nifty Bank'
     api_version = '2.0'
 
-    strike_price = 0
+    current_price = 0
     try:
         api_response = api_instance.get_full_market_quote(symbol, api_version)
         symbol = symbol.replace('|',':')
-        strike_price = api_response.data[symbol].last_price
+        current_price = api_response.data[symbol].last_price
     except ApiException as e:
         print("Exception when calling MarketQuoteApi->get_full_market_quote: %s\n" % e)
     x = 0
-    rounded_price = round(strike_price / 50) * 50
+    rounded_price = round(current_price / 50) * 50
     spot_price = 0
     tradingsymbol = ""
     while True:
@@ -244,7 +261,8 @@ if __name__ == "__main__":
     end_index = min(target_row_index + 9, len(put_df))
     selected_rows = put_df.iloc[start_index:end_index]
     pe_dict = { row['instrument_key']: row['tradingsymbol'] for index, row in selected_rows.iterrows()}
-
-
+    pe_dict.update(ce_dict)
+    
+    asyncio.run(fetch_market_data(pe_dict,current_price,date_obj))
 
 
