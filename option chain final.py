@@ -12,6 +12,8 @@ from kite_trade import *
 from py_vollib.black_scholes.implied_volatility import implied_volatility
 from py_vollib.black_scholes.greeks.analytical import delta, gamma, rho, theta, vega
 from datetime import datetime, timedelta
+import traceback
+import asyncio
 
 
 #user_id="KC0"  # kite user id
@@ -22,7 +24,7 @@ from datetime import datetime, timedelta
 print("----Option Chain----")
 #api_key = input("Enter Kite Api Key : ").strip()
 #access_token = input("Enter Kite Access Token : ").strip()
-enctoken = "mMH4Jdy9WxmxY7X1j82AdKOjv1qsTxQHOI85sPQ0Qxi6cQ7u2YQFK8j9Y53Rh0H0/69alv0RzY614WuuyVc3UmAlSWNJSlKAROz8W1qoFMxkOpApGKL6cQ=="
+enctoken = ""
 kite = KiteApp(enctoken=enctoken)
 sheet_no = input("Enter Sheet No. : ").strip()
 # print(kite.margins())
@@ -73,8 +75,14 @@ oc.range("d2").value, oc.range("d3").value, oc.range("d4").value, oc.range("d5")
 try:
     oc.range('d2:e5').api.Borders.Weight = 3
     oc.range('d7:e33').api.Borders.Weight = 2
-    oc.range('g:bg').api.Borders.Weight = 1
-    oc.range('af:af').api.Borders.Weight = 4
+    oc.range('g1:ai18').api.Borders.Weight = 1
+    oc.range('u2:u18').api.Borders.Weight = 3
+    oc.range('g10:ak10').color = (173,216,230)
+    oc.range('v1:v18').color = (173,216,230)
+    oc.range('g1:ak1').color = (255, 255, 153)
+    # oc.range("g20:h20").color = (255, 255, 153)
+    oc.range("s2:s18").color = (173,216,230)
+    oc.range("y2:y18").color = (173,216,230)
 except:
     pass
 
@@ -84,7 +92,8 @@ fut_expiries_list = []
 instrument_dict = {}
 prev_day_oi = {}
 stop_thread = False
-
+prev_test1= []
+prev_test2= []
 
 def get_oi(data):
     global prev_day_oi, kite, stop_thread
@@ -107,6 +116,28 @@ def get_oi(data):
                 except Exception as e:
                     time.sleep(0.5)
 
+def change_of_change(pe_change_oi,ce_change_oi) -> None:
+    global prev_test1, prev_test2
+    if not prev_test1 or prev_test1 == []:
+        prev_test1 = copy.deepcopy(pe_change_oi)
+        prev_test2 = copy.deepcopy(ce_change_oi)
+        return
+    
+    ce_list = []
+    pe_list = []
+    if len(set(prev_test1).intersection(set(pe_change_oi))) <  2:
+        for x in range(len(pe_change_oi)):
+            ce_list.append(ce_change_oi[x] - prev_test2[x])
+            pe_list.append(pe_change_oi[x] - prev_test1[x])
+        prev_test1 = copy.deepcopy(pe_change_oi)
+        prev_test2 = copy.deepcopy(ce_change_oi)
+        data = {"ce_change_of_change_oi":ce_list,"pe_change_of_change_oi":pe_list}
+        change_df = pd.DataFrame(data)
+        oc.range("s1").options(index=False).value = change_df['ce_change_of_change_oi']
+        oc.range("y1").options(index=False).value = change_df['pe_change_of_change_oi']
+    
+    return
+        
 
 print("Excel : Started")
 while True:
@@ -174,7 +205,7 @@ while True:
     "NSE:NIFTY MIDCAP 50" if inp_symbol == "MIDCPNIFTY" else    "BSE:SENSEX" if inp_symbol == "SENSEX" else    "NSE:NIFTY BANK" if inp_symbol == "BANKNIFTY" else    "NSE:NIFTY FIN SERVICE" if inp_symbol == "FINNIFTY" else    f"NSE:{inp_symbol}")
             list_of_symbols = list(instrument_dict.keys())
             #spot_instrument = "NSE:NIFTY 50" if inp_symbol == "NIFTY" else (
-                #"NSE:NIFTY BANK" if inp_symbol == "BANKNIFTY" else f"NSE:{inp_symbol}")
+            #"NSE:NIFTY BANK" if inp_symbol == "BANKNIFTY" else f"NSE:{inp_symbol}")
             
             
             list_of_symbols = list(instrument_dict.keys())
@@ -188,7 +219,6 @@ while True:
                     vix_data = values
                 elif symbol == fut_instrument:
                     fut_data = values
-
             for symbol, values in tick_data:
                 if symbol == spot_instrument or symbol == "NSE:INDIA VIX" or symbol == fut_instrument:
                     pass
@@ -202,16 +232,16 @@ while True:
                         option_data[symbol]["Instrument_Type"] = instrument_dict[symbol]["instrumentType"]
                         option_data[symbol]["LTP"] = values["last_price"]
                         option_data[symbol]["LTP_Change"] = values["last_price"] - values["ohlc"]["close"] if values["last_price"] != 0 else 0
-                        option_data[symbol]["LTT"] = values["last_trade_time"]
-                        option_data[symbol]["Total_Buy_Quantity"] = values["buy_quantity"]
-                        option_data[symbol]["Total_Sell_Quantity"] = values["sell_quantity"]
+                        # option_data[symbol]["LTT"] = values["last_trade_time"]
+                        # option_data[symbol]["Total_Buy_Quantity"] = values["buy_quantity"]
+                        # option_data[symbol]["Total_Sell_Quantity"] = values["sell_quantity"]
                         option_data[symbol]["Average_Price"] = values["average_price"]
-                        option_data[symbol]["Open"] = values["ohlc"]["open"]
-                        option_data[symbol]["High"] = values["ohlc"]["high"]
-                        option_data[symbol]["Low"] = values["ohlc"]["low"]
-                        option_data[symbol]["Best_Bid_Price"] = values["depth"]["buy"][0]["price"]
-                        option_data[symbol]["Best_Ask_Price"] = values["depth"]["sell"][0]["price"]
-                        option_data[symbol]["Prev_Close"] = values["ohlc"]["close"]
+                        # option_data[symbol]["Open"] = values["ohlc"]["open"]
+                        # option_data[symbol]["High"] = values["ohlc"]["high"]
+                        # option_data[symbol]["Low"] = values["ohlc"]["low"]
+                        # option_data[symbol]["Best_Bid_Price"] = values["depth"]["buy"][0]["price"]
+                        # option_data[symbol]["Best_Ask_Price"] = values["depth"]["sell"][0]["price"]
+                        # option_data[symbol]["Prev_Close"] = values["ohlc"]["close"]
                         option_data[symbol]["Total_Traded_Volume"] = values["volume"]
                         option_data[symbol]["OI"] = int(values["oi"]/lot_size)
                         try:
@@ -268,9 +298,13 @@ while True:
             ce_df.index = ce_df["CE_Strike_Price"]
             ce_df = ce_df.drop(["CE_Strike_Price"], axis=1)
             ce_df["Strike"] = ce_df.index
+            ce_df.drop(columns=['CE_Instrument_Type'], inplace=True)
+
 
             pe_df = df[df["Instrument_Type"] == "PE"]
             pe_df = pe_df.rename(columns={i: f"PE_{i}" for i in list(pe_df.keys())})
+            pe_df.drop(columns=['PE_Instrument_Type'], inplace=True)
+
             pe_df.index = pe_df["PE_Strike_Price"]
             pe_df = pe_df.drop("PE_Strike_Price", axis=1)
             df = pd.concat([ce_df, pe_df], axis=1).sort_index()
@@ -283,7 +317,7 @@ while True:
                 itm_put = df[df.index > i]
                 itm_put_loss = (itm_put.index - i) * itm_put["PE_OI"]
                 total_profit_loss[sum(itm_call_loss) + sum(itm_put_loss)] = i
-            df.index = [np.nan] * len(df)
+            # df.index = [np.nan] * len(df)
             try:
                 fut_change_oi = fut_data["oi"] - prev_day_oi[fut_instrument]
             except:
@@ -318,7 +352,56 @@ while True:
                                     ["PCR", round((sum(list(df["PE_OI"]))/sum(list(df["CE_OI"])) if sum(list(df["CE_OI"])) != 0 else 0), 2)],
                                     ["Max Pain Strike", total_profit_loss[min(list(total_profit_loss.keys()))]]
                                     ]
-            oc.range("g1").value = df
+
+            x = 0
+            target_row_index = 0
+            rounded_price = round(spot_data['last_price']/ 50) * 50
+            while True:
+                spot_price = rounded_price - (x*50)
+                flag = (df['Strike'] == spot_price).any()
+                if flag:
+                    target_row_index = df[df['Strike'] == spot_price].index[0]
+                    target_row_index = df.index.get_loc(target_row_index)
+                    break
+                spot_price = rounded_price + (x*50)
+                flag = (df['Strike'] == spot_price).any()
+                if flag:
+                    target_row_index = df[df['Strike'] == spot_price].index[0]
+                    target_row_index = df.index.get_loc(target_row_index)
+                    break
+                x += 1
+
+            start_index = max(target_row_index - 8, 0) 
+            end_index = int(min(target_row_index + 9, len(df)))
+            test1 = list(copy.deepcopy(df.iloc[start_index:end_index]['PE_OI_Change']))
+            test2 = list(copy.deepcopy(df.iloc[start_index:end_index]['CE_OI_Change']))
+
+            change_of_change(test1,test2)
+            oc.range("g1").options(index=False).value = df.iloc[start_index:end_index][[f'CE_IV{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                    f'CE_Delta{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                      f'CE_Gamma{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                      f'CE_Rho{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                      f'CE_Theta{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                      f'CE_Vega{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                      f'CE_Average_Price','CE_Total_Traded_Volume',
+                                                                      f'CE_Intrinsic_Value{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                      f'CE_Time_Value{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                      'CE_OI','CE_OI_Change'
+                                                                       ]]
+            oc.range("t1").options(index= False).value = df.iloc[start_index:end_index][['CE_LTP','CE_LTP_Change','Strike',
+                                                                      'PE_LTP_Change','PE_LTP']]
+            
+            oc.range("z1").options(index= False).value = df.iloc[start_index:end_index][['PE_OI_Change','PE_OI',
+                                                                      f'PE_Time_Value{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                       f'PE_Intrinsic_Value{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                        f'PE_Average_Price','CE_Total_Traded_Volume',
+                                                                        f'PE_Vega{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                        f'PE_Theta{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                        f'PE_Rho{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                        f'PE_Gamma{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                        f'PE_Delta{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}',
+                                                                        f'PE_IV{"(Fut)" if inp_calc_base_fut is True else "(Spot)"}']]
         except Exception as e:
             # print(e)
+            # traceback.print_exc()
             pass
